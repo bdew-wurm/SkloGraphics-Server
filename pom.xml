@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Server half of SkloGraphics's distant terrain refinement (see ../distantTerrain.md). An
+     independent Maven project on purpose - the root pom.xml does not list it as a module, so the
+     client build is exactly as it was. Build from this directory:
+         mvn package                  -> target/DistantTerrainRefinement.jar
+         mvn package -Pdeploy-server  -> also copies jar + descriptor into a server install -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.sklotopolis</groupId>
+    <artifactId>DistantTerrainRefinement</artifactId>
+    <version>0.1.1</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Root of the Wurm Unlimited dedicated server install the deploy-server profile copies into:
+             the jar goes to mods/distantTerrainRefinement/, the descriptor to mods/, matching
+             classpath=DistantTerrainRefinement.jar in mods/distantTerrainRefinement.properties.
+             A different machine/path from the client's wurm.install.dir, hence its own property;
+             override with -Dwurm.server.install.dir=... -->
+        <wurm.server.install.dir>C:/Program Files (x86)/Steam/steamapps/common/Wurm Unlimited Dedicated Server</wurm.server.install.dir>
+        <antrun.version>3.1.0</antrun.version>
+    </properties>
+
+    <dependencies>
+        <!-- Provided by the server at runtime (modlauncher.jar / server.jar), so not bundled.
+             0.45 is the launcher version installed on the target server; the ModComm and listener
+             APIs used here are the same in the latest (0.47). -->
+        <dependency>
+            <groupId>org.gotti.wurmunlimited</groupId>
+            <artifactId>server-modlauncher</artifactId>
+            <version>0.45</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.gotti.wurmunlimited</groupId>
+            <artifactId>server</artifactId>
+            <version>4596061</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <repositories>
+        <repository>
+            <id>gotti-no-ip-org-ssh-repository</id>
+            <url>https://gotti.no-ip.org/maven/repository</url>
+        </repository>
+    </repositories>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>8</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- mvn package -Pdeploy-server
+             Copies the jar and the mod descriptor into the server install. Stop the server first:
+             Windows locks a jar a running JVM has loaded. Skipped with a warning if the install
+             directory doesn't exist. -->
+        <profile>
+            <id>deploy-server</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>${antrun.version}</version>
+                        <executions>
+                            <execution>
+                                <id>deploy-server</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target xmlns:if="ant:if" xmlns:unless="ant:unless">
+                                        <available property="wurm.server.present" type="dir" file="${wurm.server.install.dir}/mods"/>
+                                        <echo unless:set="wurm.server.present" level="warning"
+                                              message="No Wurm server install at ${wurm.server.install.dir}/mods - skipping deploy. Override with -Dwurm.server.install.dir=..."/>
+                                        <mkdir if:set="wurm.server.present" dir="${wurm.server.install.dir}/mods/distantTerrainRefinement"/>
+                                        <echo if:set="wurm.server.present" level="info"
+                                              message="Deploying -> ${wurm.server.install.dir}/mods (stop the server first: Windows locks a loaded jar)"/>
+                                        <copy if:set="wurm.server.present"
+                                              file="${project.build.directory}/${project.build.finalName}.jar"
+                                              todir="${wurm.server.install.dir}/mods/distantTerrainRefinement"
+                                              overwrite="true" failonerror="true"/>
+                                        <copy if:set="wurm.server.present"
+                                              file="${project.basedir}/mods/distantTerrainRefinement.properties"
+                                              todir="${wurm.server.install.dir}/mods"
+                                              overwrite="true" failonerror="true"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>
