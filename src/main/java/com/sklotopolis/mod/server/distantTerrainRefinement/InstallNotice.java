@@ -30,9 +30,9 @@ final class InstallNotice {
     // Must match the client's ModPresence.CHANNEL_NAME exactly.
     static final String CHANNEL_NAME = "SkloGraphics:installed";
 
-    // PLACEHOLDER picture of what the player gets: replace with the real screenshot's address. The
-    // client only loads plain http:// addresses here (WurmImage); other schemes show an empty frame.
-    static final String IMAGE_URL = "http://patreon.game.sklotopolis.com/skloGraphics-preview.jpg";
+    // Picture shown in the window. The client only loads plain http:// addresses here (WurmImage);
+    // other schemes show an empty frame.
+    static final String IMAGE_URL = "http://web.game.sklotopolis.com:8080/unlimited/sklographics.jpg";
     static final String DOWNLOAD_URL = "https://gitlab.com/Dominikk/SkloGraphics/-/releases";
 
     private static final long DELAY_MILLIS = 20_000L;
