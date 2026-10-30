@@ -97,6 +97,7 @@ remove the `#` in front of one. Restart the server after changing it.
 | `weatherCloudBias` | `0.007` | Pulls the cloud target down. This is by far the stronger of the two, because rain can never exceed cloudiness. `0` = vanilla. |
 | `toolMenu` | `true` | Right-click menus listing the actions of every carried tool. `false` = vanilla menus for everyone. |
 | `toolMenuMaxTools` | `150` | How many different kinds of items a player's carried stuff is scanned for when building a menu (tools and weapons first). Lower it if the log warns about slow menu builds. |
+| `installNotice` | `true` | Shows the "please install SkloGraphics" window to players whose client does not report the mod. `false` = never. |
 | `defaultAction.*` | none | Overrides what the **E** key does on something; see below. |
 
 ### Weather
@@ -155,7 +156,7 @@ Most of the mod is invisible to players without SkloGraphics. These parts are no
   send backlog instead of vanilla's 4 KB, so the world appears sooner for every player.
 - **A "please install SkloGraphics" window.** About 20 seconds after login, a player whose client does not report SkloGraphics
   gets a small window with a picture, what the mod does and where to download it. It shows at every login until they install the
-  mod. There is deliberately no setting to switch it off; if you do not want it, tell us.
+  mod. Switch it off with `installNotice=false`.
 - **Creature colours** reach vanilla clients through the game's normal repaint packet, as a close approximation.
 
 ---

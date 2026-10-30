@@ -8,6 +8,7 @@ import org.gotti.wurmunlimited.modcomm.IChannelListener;
 import org.gotti.wurmunlimited.modcomm.ModComm;
 
 import java.nio.ByteBuffer;
+import java.util.Properties;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,9 +38,15 @@ final class InstallNotice {
     private static final long DELAY_MILLIS = 20_000L;
 
     private static volatile Channel channel;
+    private static volatile boolean enabled = true;
     private static final Map<Long, Long> waiting = new ConcurrentHashMap<>();
 
     private InstallNotice() {
+    }
+
+    static void configure(Properties properties) {
+        enabled = Boolean.parseBoolean(properties.getProperty("installNotice", "true").trim());
+        logger.info("InstallNotice: window for players without SkloGraphics " + (enabled ? "on" : "off"));
     }
 
     static void registerChannel() {
@@ -57,7 +64,7 @@ final class InstallNotice {
     }
 
     static void loggedIn(Player player) {
-        if (channel != null) waiting.put(player.getWurmId(), System.currentTimeMillis());
+        if (enabled && channel != null) waiting.put(player.getWurmId(), System.currentTimeMillis());
     }
 
     static void forget(long wurmId) {
@@ -67,7 +74,7 @@ final class InstallNotice {
     /** Server poll. */
     static void poll() {
         final Channel ch = channel;
-        if (ch == null || waiting.isEmpty()) return;
+        if (!enabled || ch == null || waiting.isEmpty()) return;
         final long now = System.currentTimeMillis();
         for (Iterator<Map.Entry<Long, Long>> it = waiting.entrySet().iterator(); it.hasNext(); ) {
             final Map.Entry<Long, Long> entry = it.next();

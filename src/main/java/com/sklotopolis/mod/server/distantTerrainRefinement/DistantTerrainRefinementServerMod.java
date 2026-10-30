@@ -323,6 +323,7 @@ public class DistantTerrainRefinementServerMod implements WurmServerMod, Configu
             }
         }
         try {
+            if (properties != null) InstallNotice.configure(properties);
             InstallNotice.registerChannel();
         } catch (Throwable e) {
             logger.log(Level.WARNING, "InstallNotice: could not register its channel", e);
