@@ -317,9 +317,9 @@ public class DistantTerrainRefinementServerMod implements WurmServerMod, Configu
         Properties properties = this.config;
         if (properties != null) {
             try {
-                DefaultActionCatalog.configure(properties);
+                DefaultActionRules.configure(properties);
             } catch (Throwable e) {
-                logger.log(Level.WARNING, "DefaultActionCatalog: could not read the defaultAction.* settings", e);
+                logger.log(Level.WARNING, "DefaultActionRules: could not read the defaultAction.* settings", e);
             }
         }
         try {
@@ -364,7 +364,7 @@ public class DistantTerrainRefinementServerMod implements WurmServerMod, Configu
         }
     }
 
-    // The E-key default action overrides (defaultAction.*) are read later; see DefaultActionCatalog.
+    // The E-key default action overrides (defaultAction.*) are read later; see DefaultActionRules.
     @Override
     public void configure(Properties properties) {
         Properties copy = new Properties();

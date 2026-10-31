@@ -1,12 +1,14 @@
 package com.sklotopolis.mod.server.distantTerrainRefinement;
 
 import com.wurmonline.communication.SocketConnection;
+import com.wurmonline.server.Items;
 import com.wurmonline.server.Players;
 import com.wurmonline.server.behaviours.ActionEntry;
 import com.wurmonline.server.behaviours.Actions;
 import com.wurmonline.server.creatures.Communicator;
 import com.wurmonline.server.creatures.CreatureTemplate;
 import com.wurmonline.server.creatures.CreatureTemplateFactory;
+import com.wurmonline.server.items.Item;
 import com.wurmonline.server.items.ItemTemplate;
 import com.wurmonline.server.items.ItemTemplateFactory;
 import com.wurmonline.server.players.Player;
@@ -26,33 +28,29 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Sends each SkloGraphics player, once per login, everything their client needs to pick the E-key
- * default action without asking: every action id and name (server-mod actions included), the tool
- * capabilities of every item template, and default-action candidates computed from this server's
- * own ItemTemplate/CreatureTemplate flags - so modded items and creatures are covered too. The
- * client keeps it for the session and only falls back to asking for a menu when neither this nor
- * its built-in table knows a target.
+ * Sends each SkloGraphics player, once per login, what their client needs to show the E-key default
+ * action: every action id, name and range, the tool flags of every item template, the best action
+ * per item and creature template worked out from the template flags, and the owner's rules.
  *
- * Owners can override or extend any of it in mods/distantTerrainRefinement.properties:
- *   defaultAction.item.<templateId>=<candidates>
- *   defaultAction.creature.<templateId>=<candidates>
- *   defaultAction.tile.<tileTypeId>=<candidates>
- * where <candidates> is "none" or a comma list, best first, of
- *   <actionId>[@<tool>[+<tool>...]][!][?]
- * (tool: dig mine slash axe saw sickle scythe field cultivate butcher fish scissors liquid groom
- * lead seed sharp bucket; "!" = only when such a tool is already active; "?" = availability
- * depends on permissions or state, so the client confirms it against a server menu). Example:
- *   defaultAction.item.852=3        large crates open
- *   defaultAction.creature.64=106@lead?
+ * A rule in mods/distantTerrainRefinement.properties (or set through SkloGraphicsApi) names a target,
+ * optionally an activated item, and one action:
+ *   defaultAction.<target>[@<activated item>]=<action>
+ * target: item[.<id>], creature[.<id>], tile[.<id>], wall, fence, floor, bridge, cave, corner, border,
+ * player, or any (every target, needs an activated item). Items and creatures take a template id or
+ * the string id from IdFactory. The action is an id, a name (mod actions get a new id every start) or
+ * "none". The client takes the activated item's rules, most exact target first, then the target's
+ * rules without an item, then the computed default. A properties line wins over an API rule, and
+ * changed rules re-send the catalogue to everyone online.
  *
- * The wire format (message types, the version byte, tool bits, flags) is duplicated in the
- * client's DefaultActionCatalog and DefaultActionTable - change them together.
+ * The client doesn't know template ids of carried items (the game only sends icon and name), so it
+ * asks for the activated item's with MSG_WANT_TEMPLATE once rules that need it exist.
+ *
+ * The wire format is duplicated in the client's DefaultActionCatalog - change them together.
  */
 public final class DefaultActionCatalog {
     private static final Logger logger = Logger.getLogger(DefaultActionCatalog.class.getName());
@@ -68,6 +66,9 @@ public final class DefaultActionCatalog {
     static final byte MSG_CREATURES = 5;
     static final byte MSG_TILES = 6;
     static final byte MSG_END = 7;
+    static final byte MSG_RULES = 8;
+    static final byte MSG_WANT_TEMPLATE = 9;
+    static final byte MSG_TEMPLATE = 10;
 
     static final int T_DIG = 1;
     static final int T_MINE = 1 << 1;
@@ -88,17 +89,11 @@ public final class DefaultActionCatalog {
     static final int T_SHARP = 1 << 16;
     static final int T_BUCKET = 1 << 17;
 
-    static final int F_ACTIVE_ONLY = 1;
-    static final int F_VERIFY = 2;
-    static final int F_CONFIRMED = 4;
-    static final int F_TOGGLE_OPEN = 8;
-
     private static final short OPEN = 3;
     private static final short TAKE = 6;
     private static final short TRADE = 63;
     private static final short CHOP_UP = 97;
     private static final short LEAD = 106;
-    private static final short STOP_LEADING = 107;
     private static final short BUTCHER = 120;
     private static final short EMBARK_COMMANDER = 331;
     private static final short EMBARK_PASSENGER = 332;
@@ -112,10 +107,6 @@ public final class DefaultActionCatalog {
     private static final int SEND_LOW_WATER_BYTES = 8192;
     private static final int MAX_BYTES_PER_POLL = 32768;
 
-    private static final String[] TOOL_NAMES = {"dig", "mine", "slash", "axe", "saw", "sickle", "scythe", "field", "cultivate",
-            "butcher", "fish", "scissors", "liquid", "groom", "lead", "seed", "sharp", "bucket"};
-
-    private static final Map<String, String> overrides = new HashMap<String, String>();
     private static final Map<Long, Integer> queue = new ConcurrentHashMap<Long, Integer>();
     private static volatile Channel channel;
     private static volatile List<byte[]> messages;
@@ -123,33 +114,14 @@ public final class DefaultActionCatalog {
     private static final class Cand {
         final short action;
         final int tools;
-        final int prefer;
-        final int flags;
 
-        Cand(short action, int tools, int prefer, int flags) {
+        Cand(short action, int tools) {
             this.action = action;
             this.tools = tools;
-            this.prefer = prefer;
-            this.flags = flags;
         }
     }
 
     private DefaultActionCatalog() {
-    }
-
-    static void configure(Properties properties) {
-        overrides.clear();
-        for (String key : properties.stringPropertyNames()) {
-            if (!key.startsWith("defaultAction.")) continue;
-            String value = properties.getProperty(key).trim();
-            try {
-                parse(value);
-                overrides.put(key.substring("defaultAction.".length()).trim(), value);
-            } catch (IllegalArgumentException e) {
-                logger.warning("DefaultActionCatalog: ignoring " + key + "=" + value + " - " + e.getMessage());
-            }
-        }
-        if (!overrides.isEmpty()) logger.info("DefaultActionCatalog: " + overrides.size() + " default action overrides");
     }
 
     static void registerChannel() {
@@ -162,6 +134,7 @@ public final class DefaultActionCatalog {
 
                 @Override
                 public void handleMessage(Player player, ByteBuffer message) {
+                    wantTemplate(player, message);
                 }
             });
             logger.info("DefaultActionCatalog: registered ModComm channel " + CHANNEL_NAME);
@@ -171,6 +144,26 @@ public final class DefaultActionCatalog {
         }
     }
 
+    private static void wantTemplate(Player player, ByteBuffer message) {
+        Channel ch = channel;
+        if (ch == null || message.remaining() < 10 || message.get() != MSG_WANT_TEMPLATE || message.get() != VERSION) return;
+        long itemId = message.getLong();
+        int template = -1;
+        try {
+            Item item = Items.getItem(itemId);
+            if (item.getOwnerId() == player.getWurmId()) template = item.getTemplateId();
+        } catch (Exception e) {
+            logger.log(Level.FINE, "DefaultActionCatalog: no item " + itemId, e);
+        }
+        ByteBuffer reply = ByteBuffer.allocate(14);
+        reply.put(MSG_TEMPLATE);
+        reply.put(VERSION);
+        reply.putLong(itemId);
+        reply.putInt(template);
+        reply.flip();
+        ch.sendMessage(player, reply);
+    }
+
     static void forget(long playerId) {
         queue.remove(playerId);
     }
@@ -178,7 +171,14 @@ public final class DefaultActionCatalog {
     /** Paced like the terrain sender: never more than a few messages ahead of what the socket flushed. */
     static void poll() {
         Channel ch = channel;
-        if (ch == null || queue.isEmpty()) return;
+        if (ch == null) return;
+        if (DefaultActionRules.takeChanged() && messages != null) {
+            messages = null;
+            for (Player player : Players.getInstance().getPlayers()) {
+                if (ch.isActiveForPlayer(player)) queue.put(player.getWurmId(), 0);
+            }
+        }
+        if (queue.isEmpty()) return;
         List<byte[]> all = messages();
         if (all == null) return;
         for (Iterator<Map.Entry<Long, Integer>> it = queue.entrySet().iterator(); it.hasNext(); ) {
@@ -265,8 +265,7 @@ public final class DefaultActionCatalog {
         for (ItemTemplate t : templates) {
             String model = t.getTemplateId() == FELLED_TREE ? "model.fallen." : t.getModelName();
             if (model == null || model.isEmpty()) continue;
-            List<Cand> cands = override("item." + t.getTemplateId());
-            if (cands == null) cands = forItem(t);
+            List<Cand> cands = forItem(t);
             DataOutputStream d = items.record();
             d.writeInt(t.getTemplateId());
             d.writeUTF(model);
@@ -280,8 +279,7 @@ public final class DefaultActionCatalog {
         for (CreatureTemplate t : CreatureTemplateFactory.getInstance().getTemplates()) {
             String model = t.getModelName();
             if (model == null || model.isEmpty()) continue;
-            List<Cand> cands = override("creature." + t.getTemplateId());
-            if (cands == null) cands = forCreature(t);
+            List<Cand> cands = forCreature(t);
             DataOutputStream d = creatures.record();
             d.writeInt(t.getTemplateId());
             d.writeUTF(model);
@@ -291,22 +289,16 @@ public final class DefaultActionCatalog {
         }
         creatures.flush();
 
-        Chunker tiles = new Chunker(MSG_TILES, out);
-        for (Map.Entry<String, String> e : overrides.entrySet()) {
-            if (!e.getKey().startsWith("tile.")) continue;
-            int type;
-            try {
-                type = Integer.parseInt(e.getKey().substring("tile.".length()));
-            } catch (NumberFormatException ex) {
-                logger.warning("DefaultActionCatalog: bad tile override key " + e.getKey());
-                continue;
-            }
-            DataOutputStream d = tiles.record();
-            d.writeByte(type);
-            write(d, parse(e.getValue()));
-            tiles.commit();
+        Chunker rules = new Chunker(MSG_RULES, out);
+        for (DefaultActionRules.Rule r : DefaultActionRules.resolve(actionIds())) {
+            DataOutputStream d = rules.record();
+            d.writeByte(r.kind);
+            d.writeInt(r.target);
+            d.writeInt(r.active);
+            d.writeShort(r.action);
+            rules.commit();
         }
-        tiles.flush();
+        rules.flush();
 
         out.add(single(MSG_END, id));
         return out;
@@ -343,24 +335,23 @@ public final class DefaultActionCatalog {
         int id = t.getTemplateId();
         if (id == CORPSE) {
             // The client drops Butcher itself once the model name says "butchered.".
-            out.add(new Cand(BUTCHER, T_BUTCHER, 0, 0));
-            out.add(new Cand(OPEN, 0, 0, F_TOGGLE_OPEN));
+            out.add(new Cand(BUTCHER, T_BUTCHER));
+            out.add(new Cand(OPEN, 0));
             return out;
         }
         if (id == FELLED_TREE) {
-            out.add(new Cand(CHOP_UP, T_AXE | T_SAW, T_AXE, 0));
+            out.add(new Cand(CHOP_UP, T_AXE | T_SAW));
             return out;
         }
         if ((t.isBoat() || t.isVehicle()) && !t.isChair && !t.isTent()) {
-            out.add(new Cand(EMBARK_COMMANDER, 0, 0, F_VERIFY));
-            out.add(new Cand(EMBARK_PASSENGER, 0, 0, F_VERIFY));
+            out.add(new Cand(EMBARK_COMMANDER, 0));
             return out;
         }
         if (t.isHollow() && (!t.hasViewableSubItems() || t.isContainerWithSubItems())) {
-            out.add(new Cand(OPEN, 0, 0, F_TOGGLE_OPEN));
+            out.add(new Cand(OPEN, 0));
             return out;
         }
-        if (!t.isNoTake() && !t.isOutsideOnly() && !t.isLiquid()) out.add(new Cand(TAKE, 0, 0, 0));
+        if (!t.isNoTake() && !t.isOutsideOnly() && !t.isLiquid()) out.add(new Cand(TAKE, 0));
         return out;
     }
 
@@ -399,62 +390,30 @@ public final class DefaultActionCatalog {
     private static List<Cand> forCreature(CreatureTemplate t) {
         List<Cand> out = new ArrayList<Cand>(5);
         if (t.isTrader()) {
-            out.add(new Cand(TRADE, 0, 0, F_VERIFY));
+            out.add(new Cand(TRADE, 0));
             return out;
         }
         if (!leadable(t)) return out;
-        out.add(new Cand(STOP_LEADING, 0, 0, F_CONFIRMED));
-        out.add(new Cand(LEAD, T_LEAD, 0, F_VERIFY));
-        if (t.isMilkable()) out.add(new Cand(MILK, T_LIQUID, 0, F_ACTIVE_ONLY));
-        if (t.isWoolProducer()) out.add(new Cand(SHEAR, T_SCISSORS, 0, F_ACTIVE_ONLY));
-        out.add(new Cand(GROOM, T_GROOM, 0, F_ACTIVE_ONLY));
+        out.add(new Cand(LEAD, T_LEAD));
+        if (t.isMilkable()) out.add(new Cand(MILK, T_LIQUID));
+        if (t.isWoolProducer()) out.add(new Cand(SHEAR, T_SCISSORS));
+        out.add(new Cand(GROOM, T_GROOM));
         return out;
     }
 
-    private static List<Cand> override(String key) {
-        String value = overrides.get(key);
-        return value == null ? null : parse(value);
-    }
-
-    private static List<Cand> parse(String value) {
-        List<Cand> out = new ArrayList<Cand>();
-        if (value.equalsIgnoreCase("none") || value.isEmpty()) return out;
-        for (String part : value.split(",")) {
-            String p = part.trim();
-            int flags = 0;
-            while (p.endsWith("!") || p.endsWith("?")) {
-                flags |= p.endsWith("!") ? F_ACTIVE_ONLY : F_VERIFY;
-                p = p.substring(0, p.length() - 1).trim();
+    private static Map<String, List<Short>> actionIds() {
+        Map<String, List<Short>> out = new HashMap<String, List<Short>>();
+        for (ActionEntry e : Actions.actionEntrys) {
+            if (e == null || e.getActionString() == null) continue;
+            String name = e.getActionString().trim().toLowerCase(Locale.ROOT);
+            List<Short> ids = out.get(name);
+            if (ids == null) {
+                ids = new ArrayList<Short>(1);
+                out.put(name, ids);
             }
-            int tools = 0;
-            int at = p.indexOf('@');
-            if (at >= 0) {
-                for (String tool : p.substring(at + 1).split("\\+")) {
-                    int bit = toolBit(tool.trim().toLowerCase(Locale.ROOT));
-                    if (bit == 0) throw new IllegalArgumentException("unknown tool '" + tool + "'");
-                    tools |= bit;
-                }
-                p = p.substring(0, at).trim();
-            }
-            short action;
-            try {
-                action = Short.parseShort(p);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("'" + p + "' is not an action id");
-            }
-            if (action <= 0) throw new IllegalArgumentException("action id must be positive");
-            if ((flags & F_ACTIVE_ONLY) != 0 && tools == 0) throw new IllegalArgumentException("'!' needs a tool");
-            out.add(new Cand(action, tools, 0, flags));
+            ids.add(e.getNumber());
         }
-        if (out.size() > 255) throw new IllegalArgumentException("too many candidates");
         return out;
-    }
-
-    private static int toolBit(String name) {
-        for (int i = 0; i < TOOL_NAMES.length; i++) {
-            if (TOOL_NAMES[i].equals(name)) return 1 << i;
-        }
-        return 0;
     }
 
     private static void write(DataOutputStream d, List<Cand> cands) throws IOException {
@@ -463,8 +422,8 @@ public final class DefaultActionCatalog {
             d.writeShort(c.action);
             d.writeUTF("");
             d.writeInt(c.tools);
-            d.writeInt(c.prefer);
-            d.writeByte(c.flags);
+            d.writeInt(0);
+            d.writeByte(0);
         }
     }
 

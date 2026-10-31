@@ -118,31 +118,285 @@ This affects **all** players, not just those with SkloGraphics.
 
 ### Default actions (E key)
 
-SkloGraphics sends each player, once per login, a catalogue of the default action for every item and creature template on your
-server, worked out from the templates themselves, so modded things are covered too. To change what **E** does on something, add
-lines like:
+SkloGraphics sends each player, once per login, the default action of every item and creature template on your server, worked
+out from the templates themselves, so modded things are covered too. **E** only uses the item that is activated right now: a rake on
+a field farms, a rake on a forge opens it, and nothing is equipped for the player. To change what **E** does, add rules:
 
 ```
-defaultAction.item.<templateId>=<actionId>[@tool[+tool]][!][?]
-defaultAction.creature.<templateId>=...
-defaultAction.tile.<tileTypeId>=...
+defaultAction.<target>[@<activated item>]=<action>
 ```
 
-- The value is `none`, or a comma list of candidates, best first.
-- `@tool` limits a candidate to players carrying such a tool. Tools: `dig` `mine` `slash` `axe` `saw` `sickle` `scythe` `field`
-  `cultivate` `butcher` `fish` `scissors` `liquid` `groom` `lead` `seed` `sharp` `bucket`. Join several with `+`.
-- `!` means only while such a tool is already active in the player's hand.
-- `?` means the client checks the action against a real server menu first, because whether it works depends on permissions or
-  state.
+- **Target:** `item.<id>`, `creature.<id>`, `tile.<id>`, or `item`, `creature`, `tile` for all of them, `wall`, `fence`, `floor` (also
+  roofs), `bridge`, `cave`, `corner`, `border`, `player`, or `any` for every target, which needs an `@activated item`. Walls, fences
+  and the rest do nothing on **E** until you add a rule.
+- **Ids and the activated item:** a template id, or the string id a mod registered its template under (`ItemTemplateBuilder`,
+  `CreatureTemplateBuilder`), which stays the same across servers.
+- **Action:** an id, the action's name ignoring case, or `none`. Mod actions get a new id at every server start, so use the name for
+  those. If several actions share a name, the lowest id is used and the log warns.
 
-Example: large crates open on **E**, and a creature template is led when the player carries a lead rope:
+This works the same for custom items and custom actions: a custom item can be the target, the activated item, or both, and any item
+can be given any action. **E** looks in this order, and a player's own starred default beats all of it:
+
+1. The activated item on this exact target, then on its kind (`creature@item`), then on `any`.
+2. This exact target, then its kind.
+3. The automatic choice.
+
+So an activated item's rule beats a rule for the target alone.
+
+Rules go on their own line. A comment must sit on a line of its own too, because anything after the `=` counts as the action.
+
+#### Which id to use
+
+Item and creature ids come from `ItemList` and `CreatureTemplateIds` in the server code, or from the template string a mod registered.
+Tile ids come from `Tiles.Tile`. Common ones:
+
+| Items | | Creatures | | Tiles | |
+|---|---|---|---|---|---|
+| hatchet | 7 | cow | 3 | sand | 1 |
+| pickaxe | 20 | bear | 12 | grass | 2 |
+| saw | 24 | pig | 44 | rock | 4 |
+| shovel | 25 | dog | 51 | dirt | 5 |
+| rake | 27 | horse | 64 | clay | 6 |
+| metal hammer | 62 | bison | 82 | field | 7 |
+| mallet | 63 | sheep | 96 | moss | 20 |
+| flint and steel | 143 | | | steppe | 22 |
+| forge | 180 | | | reed | 33 |
+| large chest | 184 | | | lawn | 38 |
+| small cart | 186 | | | | |
+| sickle | 267 | | | | |
+| scythe | 268 | | | | |
+| rope | 319 | | | | |
+| wooden altar | 322 | | | | |
+| scissors | 394 | | | | |
+| small bucket | 421 | | | | |
+| grooming brush | 647 | | | | |
+| large crate | 852 | | | | |
+
+Some action names belong to more than one action, and a name always picks the lowest id, so use the id for these:
+
+| Name | Ids |
+|---|---|
+| Open | 3 for items, gates and doors, 568 for containers in the inventory |
+| Repair | 162 for items, 193 for walls, fences, floors and bridges |
+| Dig | 144 for normal digging, 921 for digging to a pile |
+| Flatten | 150 for a tile, 533 for a border |
+| Level | 532 for a tile, 865 for a border |
+| Cut down | 96 |
+
+#### Items as the target
 
 ```
+# E opens large crates, and does nothing on large chests
 defaultAction.item.852=3
-defaultAction.creature.64=106@lead?
+defaultAction.item.184=none
+
+# E on any wooden altar prays
+defaultAction.item.322=Pray
+
+# With flint and steel activated, E on a forge lights it. Without it, E still opens the forge
+defaultAction.item.180@143=Light
+
+# E on a small cart pulls it instead of embarking
+defaultAction.item.186=Pull
+
+# E does nothing on any item without its own rule. This also switches off the automatic choice for items
+defaultAction.item=none
 ```
+
+#### Creatures as the target
+
+```
+# E mounts horses instead of leading them
+defaultAction.creature.64=Ride
+
+# ...but with a grooming brush activated it grooms them
+defaultAction.creature.64@647=Groom
+
+# Cows are milked with a small bucket, sheep are sheared with scissors
+defaultAction.creature.3@421=Milk
+defaultAction.creature.96@394=Shear
+
+# E tames dogs, and never does anything on bears
+defaultAction.creature.51=Tame
+defaultAction.creature.12=none
+
+# A rope activated: every creature is led. Nothing activated: the normal choice
+defaultAction.creature@319=Lead
+
+# E never does anything on a creature that has no rule of its own
+defaultAction.creature=none
+```
+
+#### Terrain
+
+```
+# With a rake activated, fields are farmed
+defaultAction.tile.7@27=Farm
+
+# With a shovel activated, E flattens dirt and digs every other tile
+defaultAction.tile.5@25=150
+defaultAction.tile@25=144
+
+# E does nothing on rock unless a pickaxe is activated
+defaultAction.tile.4=none
+defaultAction.tile.4@20=Mine
+
+# Underground, a pickaxe mines. Rules for a tile id apply there too
+defaultAction.cave@20=Mine
+```
+
+#### Walls, fences and other structures
+
+These do nothing on **E** until you add a rule. A rule covers all walls or all fences; the kind of wall or fence can't be told apart.
+A plain fence with `fence=3` still shows Open, and the server says no on execution.
+
+```
+# E opens gates
+defaultAction.fence=3
+
+# E opens doors
+defaultAction.wall=3
+
+# With a mallet activated, walls, fences, floors, roofs and bridges are repaired
+defaultAction.wall@63=193
+defaultAction.fence@63=193
+defaultAction.floor@63=193
+defaultAction.bridge@63=193
+
+# E on another player opens a trade
+defaultAction.player=Trade
+```
+
+#### Custom items and custom actions
+
+Mod actions get a new id at every server start, so use their name here, or `SkloGraphicsApi` from code. Custom templates are best named
+by their string id, which is what the mod passed to `ItemTemplateBuilder` or `CreatureTemplateBuilder`.
+
+```
+# A custom item as the target: E unhitches at a hitching post
+defaultAction.item.ago.hitchingpost=Unhitch
+
+# Vanilla action on a custom item, and a custom action on a vanilla item
+defaultAction.item.mymod.bigchest=3
+defaultAction.item.180=Temper Blade
+
+# A custom item needed for a custom action on one target
+defaultAction.item.mymod.vault@mymod.goldenkey=Unlock Vault
+
+# A custom tool that works on every creature, every tile or every wall
+defaultAction.creature@mymod.whip=Tame Beast
+defaultAction.tile@mymod.seedbag=Plant Catseye
+defaultAction.wall@mymod.chisel=Carve Wall
+
+# A custom creature, with and without a tool
+defaultAction.creature.mymod.drake=Rename Creature
+defaultAction.creature.mymod.drake@mymod.saddle=Saddle Drake
+
+# A custom tool used on a vanilla target
+defaultAction.item.180@mymod.bellows=Stoke Fire
+
+# A vanilla tool used on a custom target
+defaultAction.item.mymod.oredeposit@20=Mine
+
+# Template ids work too, if you know them
+defaultAction.item.22045@22046=Unlock Vault
+```
+
+#### One item, everything
+
+`any` covers every target and always needs an activated item. More exact rules for the same item still win:
+
+```
+# The wand casts Spark on everything...
+defaultAction.any@mymod.wand=Cast Spark
+
+# ...except fences, where it mends them...
+defaultAction.fence@mymod.wand=Mend Fence
+
+# ...on every creature it charms...
+defaultAction.creature@mymod.wand=Charm
+
+# ...on horses it calms them...
+defaultAction.creature.64@mymod.wand=Calm
+
+# ...and on sheep it does nothing
+defaultAction.creature.96@mymod.wand=none
+```
+
+#### How the rules add up
+
+With these rules:
+
+```
+defaultAction.creature=none
+defaultAction.creature.64=Ride
+defaultAction.creature@319=Lead
+defaultAction.creature.64@647=Groom
+defaultAction.any@mymod.wand=Cast Spark
+```
+
+**E** does this:
+
+| Target | Activated | E does | Why |
+|---|---|---|---|
+| Horse | nothing | Ride | exact target |
+| Horse | rake | Ride | no rule for a rake, so the exact target |
+| Horse | grooming brush | Groom | activated item on the exact target |
+| Horse | rope | Lead | activated item on the kind |
+| Horse | wand | Cast Spark | activated item on `any` |
+| Cow | nothing | nothing | the kind says `none` |
+| Cow | rope | Lead | activated item on the kind |
+| Forge | nothing | Open | automatic choice |
+| Forge | wand | Cast Spark | activated item on `any` |
 
 The **E** key only ever *asks*. The server still decides whether the action happens, exactly as for a click in the menu.
+
+### For mod authors
+
+Other server mods can set the same rules from code with `SkloGraphicsApi`. This is the safest way to use a custom action, because you
+pass its id directly and it can't be mixed up with another action of the same name.
+
+Compile against `DistantTerrainRefinement.jar` as a provided dependency and call it from `onServerStarted()`, by which time every mod
+is loaded and has its action ids. Your mod needs no `depend.*` setting to see the class. Rules can change at any later time too; the
+catalogue is then sent again to everyone online.
+
+```java
+try {
+    short tame = tameAction.getActionId();
+    short spark = sparkAction.getActionId();
+
+    // On a target, with nothing special activated
+    SkloGraphicsApi.setDefaultAction("creature.mymod.drake", tame);
+    SkloGraphicsApi.setDefaultAction("item.ago.hitchingpost", "Unhitch");
+    SkloGraphicsApi.setDefaultAction("fence", (short) 3);
+
+    // On a target, only with this item activated: string id, or template id
+    SkloGraphicsApi.setDefaultAction("creature.mymod.drake", "mymod.whip", tame);
+    SkloGraphicsApi.setDefaultAction("creature.64", whipTemplateId, tame);
+    SkloGraphicsApi.setDefaultAction("item." + vaultTemplateId, keyTemplateId, "Unlock Vault");
+
+    // One custom item on a whole kind of target, or on everything
+    SkloGraphicsApi.setDefaultAction("wall", "mymod.chisel", spark);
+    SkloGraphicsApi.setDefaultAction("creature", "mymod.whip", tame);
+    SkloGraphicsApi.setDefaultAction("any", "mymod.wand", spark);
+
+    // Nothing on E with this item, or take a rule away again
+    SkloGraphicsApi.setDefaultAction("creature.96", "mymod.wand", "none");
+    SkloGraphicsApi.setDefaultAction("creature.64", (String) null);
+} catch (NoClassDefFoundError e) {
+    // SkloGraphics server mod not installed
+}
+```
+
+| Argument | Meaning |
+|---|---|
+| target | The part of a rule before `@`: `item.<id>`, `creature.<id>`, `tile.<id>`, `item`, `creature`, `tile`, `wall`, `fence`, `floor`, `bridge`, `cave`, `corner`, `border`, `player`, `any`. Ids are template ids or string ids. |
+| activated item (optional) | A string id or an `int` template id. Left out or `null` means the rule applies without a specific item. `any` needs one. |
+| action | A `short` action id, or a `String`: a name, an id or `none`. A `null` String removes the rule. |
+
+The two-argument form also takes the full key, like `setDefaultAction("creature.2@3", id)`. A bad target throws
+`IllegalArgumentException`. A template or action that doesn't exist logs a warning when the catalogue is built, and a line in the
+properties file wins over a rule set from code.
 
 ---
 
